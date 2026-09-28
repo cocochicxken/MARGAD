@@ -1,4 +1,4 @@
-"""Label-free MARGAD epoch-budget search for non-T-Social datasets.
+"""Label-free epoch-budget search for the final fixed configurations.
 
 Each trial fixes the final README alpha/beta/gamma values and runs one seed.
 The checkpoint is selected by the unsupervised total loss already used by the
@@ -25,23 +25,22 @@ from dataset_config import resolve_dataset
 
 ROOT = Path(__file__).resolve().parent
 EPOCH_VALUES = tuple(range(50, 121, 5))
+TSOCIAL_EPOCH_VALUES = (5, 10, 15, 20)
 SEARCH_DATASETS = ("Facebook", "Reddit", "Amazon", "YelpChi", "elliptic", "tfinance")
 DEFAULT_SEARCH_ROOT = "epoch_budget_search_h64_e50to120_step5_results"
 
 
 @dataclass(frozen=True)
 class FinalWeights:
-    """Hold the fixed model settings used while varying epoch budgets."""
-
     hidden_dim: int
     lr: float
     alpha: float
     beta: float
     gamma: float
+    extra: tuple[str, ...] = ()
 
 
-# Values transcribed from the final commands in README.md.  T-Social is
-# deliberately excluded because GPU 0 remains reserved for its active search.
+# Values transcribed from the final commands in README.md.
 FINAL_WEIGHTS = {
     "facebook": FinalWeights(64, 3e-3, 1.0, 0.15, 0.50),
     "reddit": FinalWeights(64, 3e-3, 1.0, 0.35, 1.45),
@@ -49,10 +48,20 @@ FINAL_WEIGHTS = {
     "yelpchi": FinalWeights(64, 3e-3, 1.0, 0.15, 1.05),
     "elliptic": FinalWeights(64, 1e-3, 1.0, 0.30, 1.00),
     "tfinance": FinalWeights(64, 3e-3, 1.0, 1.00, 0.05),
+    "tsocial": FinalWeights(
+        64, 3e-3, 1.0, 0.85, 0.75,
+        (
+            "--batch_size", "51200",
+            "--eval_batch_size", "51200",
+            "--batch_fanout", "8",
+            "--num_workers", "0",
+            "--dgl_graph_on_gpu", "1",
+        ),
+    ),
 }
 
 RESULT_FIELDS = (
-    "dataset", "epoch_budget", "alpha", "beta", "gamma", "hidden_dim", "lr",
+    "dataset", "epoch_budget", "alpha", "beta", "gamma", "gamma_centering", "hidden_dim", "lr",
     "selection_epoch", "selection_loss", "final_auc", "final_auprc",
     "gamma_normalize_bands", "gamma_input_tanh", "gamma_coefficient_tanh",
     "status", "return_code", "started_at", "finished_at", "duration_seconds",
@@ -60,7 +69,7 @@ RESULT_FIELDS = (
 )
 SELECTION_FIELDS = (
     "dataset", "selection", "epoch_budget", "selection_epoch", "selection_loss",
-    "alpha", "beta", "gamma", "hidden_dim", "lr", "final_auc", "final_auprc",
+    "alpha", "beta", "gamma", "gamma_centering", "hidden_dim", "lr", "final_auc", "final_auprc",
     "gamma_normalize_bands", "gamma_input_tanh", "gamma_coefficient_tanh",
     "log_path", "command",
 )
@@ -154,6 +163,7 @@ def run_trial(
     search_root: Path,
     device: str,
     resume: bool,
+    gamma_centering: int,
 ) -> dict:
     spec = resolve_dataset(dataset)
     weights = FINAL_WEIGHTS[spec.key]
@@ -182,10 +192,11 @@ def run_trial(
         "--alpha", decimal(weights.alpha),
         "--beta", decimal(weights.beta),
         "--gamma", decimal(weights.gamma),
+        "--gamma_centering", str(gamma_centering),
         "--runs", "1",
         "--tests", "1",
         "--device", device,
-        "--disable_monitor_auc",
+        *weights.extra,
     ]
     command_text = subprocess.list2cmdline(command)
     started_at = now()
@@ -199,7 +210,7 @@ def run_trial(
                 f"Started UTC: {started_at}\n"
                 f"CUDA_VISIBLE_DEVICES: {cuda_visible}\n"
                 f"Device argument: {device}\n"
-                "Selection: label-free checkpoint loss; epoch AUC monitoring disabled.\n"
+                "Selection: label-free checkpoint loss; epoch AUC monitoring enabled.\n"
                 f"Command:\n{command_text}\n\n"
             )
             process = subprocess.run(
@@ -232,6 +243,7 @@ def run_trial(
         "alpha": decimal(weights.alpha),
         "beta": decimal(weights.beta),
         "gamma": decimal(weights.gamma),
+        "gamma_centering": str(gamma_centering),
         "hidden_dim": str(weights.hidden_dim),
         "lr": str(weights.lr),
         "gamma_normalize_bands": str(spec.gamma_normalize_bands),
@@ -259,15 +271,15 @@ def run_trial(
     return result
 
 
-def select_epoch(dataset: str, rows: list[dict]) -> dict:
+def select_epoch(dataset: str, rows: list[dict], expected_epochs: tuple[int, ...]) -> dict:
     spec = resolve_dataset(dataset)
     completed = [
         row for row in rows
         if row.get("status") == "completed" and math.isfinite(numeric(row, "selection_loss"))
     ]
-    if len(completed) != len(EPOCH_VALUES):
+    if len(completed) != len(expected_epochs):
         raise RuntimeError(
-            f"{spec.cli_name}: expected {len(EPOCH_VALUES)} completed trials, "
+            f"{spec.cli_name}: expected {len(expected_epochs)} completed trials, "
             f"found {len(completed)}. Inspect failed run.log files and resume."
         )
     best = min(
@@ -288,9 +300,12 @@ def run_dataset(
     search_root: Path,
     device: str,
     resume: bool,
+    tsocial_epoch_values: tuple[int, ...],
+    gamma_centering: int,
 ) -> None:
     spec = resolve_dataset(dataset)
-    for epoch_budget in EPOCH_VALUES:
+    epoch_values = tsocial_epoch_values if spec.key == "tsocial" else EPOCH_VALUES
+    for epoch_budget in epoch_values:
         run_trial(
             spec.cli_name,
             epoch_budget,
@@ -298,9 +313,10 @@ def run_dataset(
             search_root=search_root,
             device=device,
             resume=resume,
+            gamma_centering=gamma_centering,
         )
     dataset_dir = search_root / safe_name(spec.cli_name)
-    selection = select_epoch(spec.cli_name, load_results(dataset_dir))
+    selection = select_epoch(spec.cli_name, load_results(dataset_dir), epoch_values)
     atomic_json(dataset_dir / "best_epoch_by_unsupervised_loss.json", selection)
     write_csv(dataset_dir / "best_epoch_by_unsupervised_loss.csv", [selection], SELECTION_FIELDS)
     print(
@@ -334,6 +350,14 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--data_dir", default="dataset")
     parser.add_argument("--search_root", default=DEFAULT_SEARCH_ROOT)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--tsocial_epoch_values", nargs="+", type=int, default=TSOCIAL_EPOCH_VALUES,
+        help="T-Social budgets; other datasets retain the 50..120 step-5 grid.",
+    )
+    parser.add_argument(
+        "--gamma_centering", type=int, choices=(0, 1), default=1,
+        help="Fixed Gamma-centering state for every trial (default: centered).",
+    )
     parser.add_argument("--no_resume", action="store_true")
     parser.add_argument("--skip_aggregate", action="store_true")
     parser.add_argument("--aggregate_only", action="store_true")
@@ -342,23 +366,28 @@ def parse_args(argv: list[str] | None = None):
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the requested epoch-budget trials and aggregate their results."""
-
     options = parse_args(argv)
     datasets = tuple(resolve_dataset(dataset).cli_name for dataset in options.datasets)
-    unsupported = [dataset for dataset in datasets if resolve_dataset(dataset).key == "tsocial"]
-    if unsupported:
-        raise ValueError("T-Social is intentionally excluded: GPU 0 is reserved for its active search.")
+    tsocial_epoch_values = tuple(sorted(set(options.tsocial_epoch_values)))
+    if not tsocial_epoch_values or tsocial_epoch_values[0] <= 0:
+        raise ValueError("--tsocial_epoch_values must contain positive epoch budgets.")
     search_root = root_path(options.search_root)
     if options.dry_run:
-        print(f"epoch values={EPOCH_VALUES[0]}..{EPOCH_VALUES[-1]} step=5 ({len(EPOCH_VALUES)} values)")
         for dataset in datasets:
-            weights = FINAL_WEIGHTS[resolve_dataset(dataset).key]
+            spec = resolve_dataset(dataset)
+            weights = FINAL_WEIGHTS[spec.key]
+            values = tsocial_epoch_values if spec.key == "tsocial" else EPOCH_VALUES
             print(
-                f"  {dataset}: trials={len(EPOCH_VALUES)}, hidden={weights.hidden_dim}, "
-                f"lr={weights.lr}, alpha={weights.alpha}, beta={weights.beta}, gamma={weights.gamma}",
+                f"  {dataset}: epochs={values}, hidden={weights.hidden_dim}, lr={weights.lr}, "
+                f"alpha={weights.alpha}, beta={weights.beta}, gamma={weights.gamma}, "
+                f"gamma_centering={options.gamma_centering}",
             )
-        print(f"total trials={len(datasets) * len(EPOCH_VALUES)}")
+        print(
+            "total trials=" + str(sum(
+                len(tsocial_epoch_values) if resolve_dataset(dataset).key == "tsocial" else len(EPOCH_VALUES)
+                for dataset in datasets
+            ))
+        )
         return
     if options.aggregate_only:
         aggregate(search_root, datasets)
@@ -370,6 +399,8 @@ def main(argv: list[str] | None = None) -> None:
             search_root=search_root,
             device=options.device,
             resume=not options.no_resume,
+            tsocial_epoch_values=tsocial_epoch_values,
+            gamma_centering=options.gamma_centering,
         )
     if not options.skip_aggregate:
         aggregate(search_root, datasets)

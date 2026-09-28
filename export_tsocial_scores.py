@@ -1,11 +1,12 @@
-"""Export plot-ready MARGAD scores for a specified T-Social checkpoint.
+"""Export T-Social anomaly scores from a specified checkpoint configuration.
 
 Exactly one checkpoint source is required:
-- --checkpoint PATH : explicit checkpoint file, e.g. an existing centered final model;
+- --checkpoint PATH : explicit checkpoint file;
 - --checkpoint_run N : best_model_run{N}.pth inside the process working directory
   (the per-dataset run directory written by final_10run_efficiency.py).
 
---gamma_centering must match the training state of the checkpoint.  The exporter
+--alpha_mode must match the training operator of the checkpoint.
+--gamma_centering must match its training state.  The exporter
 verifies this: a centered full-mode model requires two population centres
 (gamma_thick / gamma_thin) while an uncentered model requires none, because the
 discrepancy is then computed without subtracting them.  The verification result
@@ -25,7 +26,7 @@ import torch
 from Dataloader import load_large_graph
 from dataset_config import resolve_dataset
 from large_graph import TSocialTrainer
-from model import GAD
+from model import AdaptiveWaveletAffinity, GAD
 from training_common import evaluate_numpy, minmax_numpy, set_seed
 
 
@@ -46,7 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--beta", type=float, default=0.85)
     parser.add_argument("--gamma", type=float, default=0.75)
-    parser.add_argument("--gamma_centering", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--alpha_mode", choices=AdaptiveWaveletAffinity.VALID_MODES, required=True)
+    parser.add_argument("--gamma_centering", type=int, choices=(0, 1), default=0)
     parser.add_argument("--batch_fanout", type=int, default=8)
     parser.add_argument("--eval_batch_size", type=int, default=51200)
     parser.add_argument("--num_workers", type=int, default=0)
@@ -74,8 +76,6 @@ def default_output(gamma_centering: bool) -> str:
 
 
 def main() -> None:
-    """Validate the checkpoint policy, run inference, and export scores."""
-
     args = parse_args()
     checkpoint, checkpoint_run = resolve_checkpoint_source(args)
     checkpoint = checkpoint.resolve()
@@ -91,7 +91,7 @@ def main() -> None:
         alpha=args.alpha,
         beta=args.beta,
         gamma=args.gamma,
-        alpha_mode="full",
+        alpha_mode=args.alpha_mode,
         gamma_mode="full",
         gamma_centering=bool(args.gamma_centering),
         batch_fanout=args.batch_fanout,
@@ -104,7 +104,7 @@ def main() -> None:
         feat_size=trainer.feature_store.size(1),
         hidden_size=args.hidden_dim,
         dropout=0.0,
-        alpha_mode="full",
+        alpha_mode=args.alpha_mode,
         gamma_mode="full",
     ).to(trainer.device)
     model.load_state_dict(load_checkpoint(checkpoint))
@@ -121,7 +121,7 @@ def main() -> None:
                     f"centres (got {sorted(centers)}). Use --gamma_centering 0 "
                     "for this checkpoint."
                 )
-        elif gamma_keys & centers:
+        elif gamma_keys & set(centers):
             raise RuntimeError(
                 "Centering mismatch: --gamma_centering 0 requested, but the "
                 "checkpoint's full-mode model estimated Gamma population centres "
@@ -145,6 +145,7 @@ def main() -> None:
         "checkpoint": str(checkpoint),
         "checkpoint_run": checkpoint_run,
         "seed": args.seed,
+        "alpha_mode": args.alpha_mode,
         "gamma_mode": "full",
         "gamma_centering": bool(args.gamma_centering),
         "centering_consistency": "verified",

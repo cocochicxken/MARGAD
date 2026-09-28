@@ -1,4 +1,4 @@
-"""Declarative experiment matrix for the three-branch MARGAD ablations.
+"""Declarative experiment matrix for the three-loss ablation package.
 
 This module deliberately has no torch/DGL imports so that ``--dry-run`` and
 the matrix tests work on a machine that only has a Python interpreter.
@@ -41,7 +41,7 @@ class AblationVariant:
     study: str
     description: str
     active_losses: tuple[str, ...]
-    alpha_mode: str = "full"
+    alpha_mode: str = "learned_no_target_anonymization"
     gamma_mode: str = "full"
 
     @property
@@ -73,7 +73,7 @@ ALPHA_VARIANTS: tuple[AblationVariant, ...] = (
     AblationVariant("A1", "alpha", "fixed anonymous two-hop random-walk affinity", LOSS_NAMES, "anonymous_two_hop"),
     AblationVariant("A2", "alpha", "fixed equal one/two-hop anonymous affinity", LOSS_NAMES, "fixed_equal_multiscale"),
     AblationVariant("A3", "alpha", "learned affinity without coefficient-sum normalization", LOSS_NAMES, "learned_no_coefficient_normalization"),
-    AblationVariant("A4", "alpha", "learned affinity without target anonymization", LOSS_NAMES, "learned_no_target_anonymization"),
+    AblationVariant("A4", "alpha", "calibrated affinity with target-return removal", LOSS_NAMES, "full"),
     AblationVariant("A5", "alpha", "learned raw sampled/path-volume affinity without normalization", LOSS_NAMES, "learned_no_degree_or_path_volume_normalization"),
     AblationVariant("A6", "alpha", "coefficient-matched raw A/A^2 volume normalization", LOSS_NAMES, "paper_matched_volume"),
 )
@@ -131,8 +131,6 @@ def parse_seeds(values: Iterable[str] | None) -> tuple[int, ...]:
 
 
 def selected_variants(studies: Iterable[str] | None) -> tuple[AblationVariant, ...]:
-    """Resolve requested study names to their ordered ablation variants."""
-
     selected = parse_csv_or_space(studies, ("loss", "alpha", "gamma"))
     variants: list[AblationVariant] = []
     if "loss" in selected:
@@ -145,8 +143,6 @@ def selected_variants(studies: Iterable[str] | None) -> tuple[AblationVariant, .
 
 
 def selected_specs(datasets: Iterable[str] | None) -> tuple[DatasetSpec, ...]:
-    """Resolve requested dataset names to validated dataset specifications."""
-
     available = tuple(spec.cli_name for spec in DATASET_SPECS)
     names = parse_csv_or_space(datasets, available)
     return tuple(resolve_dataset(name) for name in names)
@@ -157,8 +153,6 @@ def planned_run_count(
     datasets: Iterable[str] | None = None,
     seeds: Iterable[str] | None = None,
 ) -> int:
-    """Return the Cartesian product size for studies, datasets, and seeds."""
-
     return len(selected_variants(studies)) * len(selected_specs(datasets)) * len(parse_seeds(seeds))
 
 

@@ -1,4 +1,4 @@
-"""Load and preprocess the seven datasets supported by the MARGAD code."""
+"""Data loading and graph preprocessing for the seven supported datasets."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from utils import scipy_to_torch_sparse
 
 @dataclass(frozen=True)
 class FullGraphData:
-    """In-memory tensors and arrays used by the full-graph trainer."""
-
     adjacency: torch.Tensor
     features: np.ndarray
     labels: np.ndarray
@@ -26,8 +24,6 @@ class FullGraphData:
 
 @dataclass(frozen=True)
 class LargeGraphData:
-    """DGL graph and node tensors used by the sampled T-Social trainer."""
-
     graph: object
     features: torch.Tensor
     labels: torch.Tensor
@@ -35,7 +31,7 @@ class LargeGraphData:
 
 
 def _prepare_scipy_adjacency(adjacency) -> sp.csr_matrix:
-    """Apply MARGAD preprocessing: max-symmetrize and remove explicit loops."""
+    """Match PGWave preprocessing: max-symmetrize and remove explicit loops."""
     adjacency = sp.csr_matrix(adjacency, dtype=np.float32)
     adjacency = adjacency.maximum(adjacency.transpose()).tocsr()
     diagonal = adjacency.diagonal()
@@ -238,8 +234,6 @@ def _load_tsocial(spec: DatasetSpec, data_dir: Path) -> LargeGraphData:
 
 
 def load_full_graph(spec: DatasetSpec, data_dir: str | Path) -> FullGraphData:
-    """Load a dataset routed to the full-graph training implementation."""
-
     root = Path(data_dir).resolve()
     if spec.loader == "mat":
         return _load_mat(spec, root)
@@ -251,8 +245,6 @@ def load_full_graph(spec: DatasetSpec, data_dir: str | Path) -> FullGraphData:
 
 
 def load_large_graph(spec: DatasetSpec, data_dir: str | Path) -> LargeGraphData:
-    """Load T-Social for the neighbor-sampled training implementation."""
-
     if spec.loader != "dgl_large":
         raise ValueError(f"{spec.cli_name} does not use the large-graph loader.")
     return _load_tsocial(spec, Path(data_dir).resolve())

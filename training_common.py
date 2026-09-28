@@ -1,4 +1,4 @@
-"""Shared MARGAD losses, metrics, reproducibility, and result reporting."""
+"""Shared losses, metrics, reproducibility, and result reporting."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from sklearn.metrics import auc, precision_recall_curve, roc_auc_score
 
 @dataclass(frozen=True)
 class RunResult:
-    """Record metrics, checkpoint selection, timing, and peak GPU memory."""
-
     auc: float
     auprc: float
     best_monitor_epoch: int
@@ -33,8 +31,6 @@ class RunResult:
 
 
 def resolve_device(requested: str) -> torch.device:
-    """Resolve the requested device, falling back to CPU when CUDA is absent."""
-
     if requested.startswith("cuda") and torch.cuda.is_available():
         return torch.device(requested)
     if requested.startswith("cuda"):
@@ -44,8 +40,6 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def set_seed(seed: int) -> None:
-    """Seed NumPy, Python, PyTorch, and DGL for one independent run."""
-
     np.random.seed(seed)
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -75,8 +69,6 @@ def embedding_compactness(
     evaluation_index=None,
     center: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute Global Deviation scores and their mean training loss."""
-
     normalized = F.normalize(embeddings, p=2, dim=-1)
     if center is None:
         index = _index_tensor(evaluation_index, normalized.device)
@@ -105,8 +97,6 @@ def prepare_gamma_bands(
 def gamma_centers(
     bands: torch.Tensor, evaluation_index=None,
 ) -> torch.Tensor:
-    """Estimate one population center for each WaveShift response head."""
-
     index = _index_tensor(evaluation_index, bands.device)
     if index is None:
         return bands.mean(dim=1)
@@ -279,8 +269,6 @@ def alpha_filter_bce(
     negative_scores: torch.Tensor,
     loss_fn,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Average TA-DiffRef positive/negative BCE across reference heads."""
-
     count = positive_scores.size(0)
     labels = torch.cat(
         (
@@ -296,23 +284,17 @@ def alpha_filter_bce(
 
 
 def minmax_numpy(values: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """Min-max normalize a NumPy score vector with a stable denominator."""
-
     values = np.asarray(values)
     lower, upper = values.min(), values.max()
     return (values - lower) / max(float(upper - lower), eps)
 
 
 def minmax_torch(values: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
-    """Min-max normalize a tensor score vector with a stable denominator."""
-
     lower, upper = values.min(), values.max()
     return (values - lower) / (upper - lower).clamp_min(eps)
 
 
 def combine_numpy_scores(branches: dict[str, np.ndarray], options) -> np.ndarray:
-    """Fuse available branch scores using the configured loss weights."""
-
     score = None
     for name in ("alpha", "beta", "gamma"):
         if name not in branches:
@@ -325,8 +307,6 @@ def combine_numpy_scores(branches: dict[str, np.ndarray], options) -> np.ndarray
 
 
 def combine_torch_scores(branches: dict[str, torch.Tensor], options) -> torch.Tensor:
-    """Fuse tensor branch scores using the configured loss weights."""
-
     score = None
     for name in ("alpha", "beta", "gamma"):
         if name not in branches:
@@ -339,8 +319,6 @@ def combine_torch_scores(branches: dict[str, torch.Tensor], options) -> torch.Te
 
 
 def evaluation_subset(labels, scores, evaluation_index=None):
-    """Restrict labels and scores to nodes with evaluation labels when needed."""
-
     if evaluation_index is None:
         return labels, scores
     return labels[evaluation_index], scores[evaluation_index]
@@ -349,8 +327,6 @@ def evaluation_subset(labels, scores, evaluation_index=None):
 def evaluate_numpy(
     labels: np.ndarray, scores: np.ndarray, evaluation_index=None,
 ) -> tuple[float, float]:
-    """Compute AUROC and trapezoidal AUPRC from NumPy arrays."""
-
     labels, scores = evaluation_subset(labels, scores, evaluation_index)
     precision, recall, _ = precision_recall_curve(labels, scores)
     return float(roc_auc_score(labels, scores)), float(auc(recall, precision))
@@ -359,8 +335,6 @@ def evaluate_numpy(
 def evaluate_torch(
     labels: torch.Tensor, scores: torch.Tensor, evaluation_index=None,
 ) -> tuple[float, float]:
-    """Move tensors to CPU and compute AUROC and trapezoidal AUPRC."""
-
     labels_np = labels.detach().cpu().numpy()
     scores_np = scores.detach().cpu().numpy()
     index_np = None
@@ -394,15 +368,11 @@ def reset_peak_gpu_memory(device: torch.device) -> None:
 
 
 def synchronize(device: torch.device) -> None:
-    """Synchronize CUDA before timing operations that require completion."""
-
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def peak_gpu_memory_mib(device: torch.device) -> tuple[float, float]:
-    """Return peak allocated and reserved GPU memory in MiB."""
-
     if device.type != "cuda":
         return float("nan"), float("nan")
     scale = 1024.0 * 1024.0
@@ -433,8 +403,6 @@ def print_efficiency(
 
 
 def print_final_summary(results: list[RunResult]) -> None:
-    """Print aggregate detection and efficiency statistics across runs."""
-
     auc_values = np.asarray([result.auc for result in results], dtype=np.float64)
     auprc_values = np.asarray([result.auprc for result in results], dtype=np.float64)
     print("\n==============================")

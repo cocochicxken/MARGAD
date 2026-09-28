@@ -1,4 +1,4 @@
-"""Define MARGAD command-line options without import-time side effects."""
+"""Command-line parsing without import-time side effects."""
 
 from __future__ import annotations
 
@@ -10,11 +10,16 @@ from dataset_config import SUPPORTED_DATASETS, apply_dataset_defaults
 ALPHA_ABLATION_MODES = (
     "full",
     "one_hop",
+    "symmetric_one_hop",
     "anonymous_two_hop",
     "fixed_equal_multiscale",
+    "raw_equal_multiscale",
+    "fixed_equal_no_target_anonymization",
+    "raw_equal_anonymous_no_renormalization",
     "learned_no_coefficient_normalization",
     "learned_no_target_anonymization",
     "learned_no_degree_or_path_volume_normalization",
+    "learned_raw_target_anonymization",
     "paper_matched_volume",
 )
 GAMMA_ABLATION_MODES = (
@@ -26,13 +31,8 @@ GAMMA_ABLATION_MODES = (
     "uncentered_cross_response",
 )
 
-# Historical CLI names retained for reproducibility:
-# alpha = TA-DiffRef, beta = Global Deviation, gamma = WaveShift.
-
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the training and mechanism-ablation argument parser."""
-
     parser = argparse.ArgumentParser(
         description="Train the seven-dataset multi-filter graph anomaly detector."
     )
@@ -80,8 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--alpha_mode",
         choices=ALPHA_ABLATION_MODES,
-        default="full",
-        help="Optional alpha-mechanism ablation; full exactly preserves the default.",
+        default="learned_no_target_anonymization",
+        help=(
+            "Affinity-reference operator. The default calibrates both diffusion "
+            "orders and retains target-return paths; full selects the historical "
+            "target-anonymized control."
+        ),
     )
     parser.add_argument(
         "--gamma_mode",
@@ -112,8 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parameter_parser(argv: list[str] | None = None):
-    """Parse arguments, apply dataset fallbacks, and validate basic ranges."""
-
     options = build_parser().parse_args(argv)
     options, _ = apply_dataset_defaults(options)
     if options.epoch <= 0 or options.runs <= 0 or options.tests <= 0:

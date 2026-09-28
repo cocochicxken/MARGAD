@@ -1,8 +1,9 @@
-"""Neighbor-sampled MARGAD training and streaming inference for T-Social."""
+"""Encapsulated neighbor-sampled training for T-Social."""
 
 from __future__ import annotations
 
 import copy
+import math
 import time
 from pathlib import Path
 
@@ -43,8 +44,6 @@ from ablation_diagnostics import (
 
 
 def _dgl_loader(graph, node_ids, batch_size, fanout, shuffle, num_workers):
-    """Build the two-layer DGL neighbor loader used by T-Social."""
-
     import dgl
 
     sampler = (
@@ -64,8 +63,6 @@ def _dgl_loader(graph, node_ids, batch_size, fanout, shuffle, num_workers):
 
 
 def _random_walk_return_probability(graph, device):
-    """Compute the sampled TA-DiffRef two-step return probability per node."""
-
     src, dst = graph.edges(order="eid")
     non_self = src != dst
     src, dst = src[non_self], dst[non_self]
@@ -82,8 +79,6 @@ def _random_walk_return_probability(graph, device):
 
 
 def _block_sum(block, source_features):
-    """Sum source features into the destination nodes of a DGL block."""
-
     import dgl.function as fn
 
     with block.local_scope():
@@ -98,17 +93,17 @@ def _alpha_from_terms(
     one_hop,
     two_hop=None,
     return_probability=None,
+    return_mass=None,
     one_volume=None,
     two_volume=None,
     return_filter_scores=False,
 ):
-    """Combine sampled diffusion terms into TA-DiffRef scores."""
-
     h_near, per_filter_near = model.alpha_wavelet.combine_sampled_terms(
         h_out,
         one_hop,
         two_hop,
         return_probability=return_probability,
+        return_mass=return_mass,
         one_volume=one_volume,
         two_volume=two_volume,
         return_filters=True,
@@ -120,6 +115,55 @@ def _alpha_from_terms(
     return score, filters
 
 
+def _sampled_raw_return_mass(blocks, num_nodes, device, dtype):
+    """Count sampled two-hop paths that return to each target node.
+
+    This is the sampled analogue of ``diag(B^2)`` for the exact two DGL
+    blocks used by the current batch.  It never materialises a two-hop graph.
+    """
+    import dgl
+
+    first, second = blocks
+    first_src, first_dst = first.edges(order="eid")
+    second_src, second_dst = second.edges(order="eid")
+    if first_src.numel() == 0 or second_src.numel() == 0:
+        return torch.zeros(second.num_dst_nodes(), device=device, dtype=dtype)
+
+    first_input_ids = first.srcdata[dgl.NID].long()
+    first_mid_ids = first.dstdata[dgl.NID].long()
+    second_mid_ids = second.srcdata[dgl.NID].long()
+    second_output_ids = second.dstdata[dgl.NID].long()
+
+    first_keys = (
+        first_mid_ids[first_dst] * int(num_nodes) + first_input_ids[first_src]
+    )
+    first_keys = torch.sort(first_keys).values
+    queries = (
+        second_mid_ids[second_src] * int(num_nodes)
+        + second_output_ids[second_dst]
+    )
+    positions = torch.searchsorted(first_keys, queries)
+    valid = positions < first_keys.numel()
+    matched = torch.zeros(queries.numel(), device=queries.device, dtype=dtype)
+    if valid.any():
+        matched[valid] = (
+            first_keys[positions[valid]] == queries[valid]
+        ).to(dtype=dtype)
+    return torch.zeros(
+        second.num_dst_nodes(), device=device, dtype=dtype
+    ).scatter_add_(0, second_dst, matched)
+
+
+def _sampled_symmetric_one_hop(
+    block, source_features, source_degree, destination_degree, eps,
+):
+    """Apply full-degree symmetric normalization on the sampled edges."""
+    scaled_source = source_features / source_degree.clamp_min(eps).sqrt().unsqueeze(-1)
+    return _block_sum(block, scaled_source) / destination_degree.clamp_min(
+        eps
+    ).sqrt().unsqueeze(-1)
+
+
 def _negative_alpha(
     model,
     feature_store,
@@ -129,8 +173,6 @@ def _negative_alpha(
     fanout,
     device,
 ):
-    """Construct non-target corrupted references for sampled affinity loss."""
-
     fanout = max(int(fanout), 1)
     batch_size, hidden_size = h_out.shape
     feature_device = feature_store.device
@@ -165,7 +207,14 @@ def _negative_alpha(
         p=2,
         dim=-1,
     )
-    if model.alpha_wavelet.uses_raw_path_volume:
+    if model.alpha_wavelet.mode == "symmetric_one_hop":
+        # The sampled identities are unchanged; the negative context is a
+        # bidirected synthetic star with target degree fanout and source
+        # degree one, which is the S-normalized form of that corruption.
+        one_hop = first_h.sum(dim=1) / math.sqrt(float(fanout))
+        two_hop = one_hop
+        one_volume = two_volume = None
+    elif model.alpha_wavelet.uses_raw_path_volume:
         one_hop = first_h.sum(dim=1)
         two_hop = second_h.sum(dim=(1, 2))
         one_volume = torch.full(
@@ -186,6 +235,7 @@ def _negative_alpha(
         one_hop,
         two_hop,
         return_probability=return_probability,
+        return_mass=torch.zeros(batch_size, device=device, dtype=h_out.dtype),
         one_volume=one_volume,
         two_volume=two_volume,
         return_filter_scores=True,
@@ -195,8 +245,6 @@ def _negative_alpha(
 def _normalized_adjacency_from_block(
     block, source_features, destination_features, source_degree, destination_degree,
 ):
-    """Apply normalized adjacency with self-loops to one sampled block."""
-
     source = source_features / (source_degree + 1.0).clamp_min(1e-12).sqrt().unsqueeze(-1)
     neighbours = _block_sum(block, source)
     neighbours = neighbours / (
@@ -209,8 +257,6 @@ def _normalized_adjacency_from_block(
 
 
 def _gamma_bands(model, h, lh, l2h, squash_coefficients=True):
-    """Evaluate shared and channel-specific WaveShift polynomial responses."""
-
     wavelet = model.gamma_wavelet
     thick_outputs, thin_outputs = [], []
     thick_coefficients, thin_coefficients = wavelet.effective_coefficients(
@@ -231,8 +277,6 @@ def _gamma_bands(model, h, lh, l2h, squash_coefficients=True):
 
 
 class TSocialTrainer:
-    """Train MARGAD on T-Social with sampled batches and streaming statistics."""
-
     def __init__(self, options, spec: DatasetSpec, data: LargeGraphData):
         self.options = options
         self.spec = spec
@@ -317,7 +361,33 @@ class TSocialTrainer:
             h_alpha_out = h_alpha_mid[:num_out]
             result["h_norm"] = h_alpha_out
 
-            if model.alpha_wavelet.uses_raw_path_volume:
+            if model.alpha_wavelet.mode == "symmetric_one_hop":
+                block_source_ids = blocks[1].srcdata[dgl.NID].to(
+                    self.degree.device, dtype=torch.long
+                )
+                block_output_ids = blocks[1].dstdata[dgl.NID].to(
+                    self.degree.device, dtype=torch.long
+                )
+                source_degree = self.degree.index_select(0, block_source_ids).to(
+                    self.device, dtype=h_out.dtype, non_blocking=True
+                )
+                destination_degree = self.degree.index_select(0, block_output_ids).to(
+                    self.device, dtype=h_out.dtype, non_blocking=True
+                )
+                one_hop = _sampled_symmetric_one_hop(
+                    blocks[1],
+                    h_alpha_mid,
+                    source_degree,
+                    destination_degree,
+                    model.alpha_wavelet.eps,
+                )
+                alpha_score, alpha_filters = _alpha_from_terms(
+                    model,
+                    h_alpha_out,
+                    one_hop,
+                    return_filter_scores=True,
+                )
+            elif model.alpha_wavelet.uses_raw_path_volume:
                 one_hop = _block_sum(blocks[1], h_alpha_mid)
                 raw_mid = _block_sum(blocks[0], h_alpha_input)
                 two_hop = _block_sum(blocks[1], raw_mid)
@@ -328,11 +398,22 @@ class TSocialTrainer:
                     device=self.device, dtype=h_out.dtype
                 )
                 two_volume = _block_sum(blocks[1], mid_volume.unsqueeze(-1)).squeeze(-1)
+                return_mass = (
+                    _sampled_raw_return_mass(
+                        blocks,
+                        self.num_nodes,
+                        self.device,
+                        h_out.dtype,
+                    )
+                    if model.alpha_wavelet.removes_raw_target_without_renormalization
+                    else torch.zeros_like(one_volume)
+                )
                 alpha_score, alpha_filters = _alpha_from_terms(
                     model,
                     h_alpha_out,
                     one_hop,
                     two_hop,
+                    return_mass=return_mass,
                     one_volume=one_volume,
                     two_volume=two_volume,
                     return_filter_scores=True,
@@ -410,8 +491,6 @@ class TSocialTrainer:
         return result
 
     def _estimate_centers(self, model) -> dict[str, torch.Tensor]:
-        """Estimate graph-level branch centers without storing all embeddings."""
-
         if not (self.use_beta or self.use_gamma):
             return {}
         sums: dict[str, torch.Tensor] = {}
@@ -649,8 +728,7 @@ class TSocialTrainer:
             },
             "score_only_combinations": score_only,
             "notes": {
-                "alpha_full_mode": "sampled random-walk analogue of P=D^-1(A-diag(A)) with target-return removal",
-                "raw_volume_interpretation": "A5/A6 use fanout-sampled raw message/path-volume analogues; they are not exact full-graph A^2 volumes.",
+                "raw_volume_interpretation": "Raw TA-DiffRef controls use fanout-sampled message/path-count analogues; they are not exact full-graph B^2 responses.",
                 "streaming_diagnostics": "Gamma concentration is reduced per batch; no N-by-hidden tensor is saved.",
                 "checkpoint_selection": "minimum unsupervised total training loss after the training midpoint",
             },
@@ -662,8 +740,6 @@ class TSocialTrainer:
         return Path.cwd() / f"best_model_run{run_index}.pth"
 
     def _train_one(self, run_index: int) -> RunResult:
-        """Train and evaluate one T-Social seed using the sampled pipeline."""
-
         seed = self.options.seed_offset + run_index
         set_seed(seed)
         print(f"\n# Run:{run_index} seed={seed}", flush=True)
@@ -869,8 +945,6 @@ class TSocialTrainer:
         )
 
     def run(self) -> list[RunResult]:
-        """Execute all requested T-Social seeds and print aggregate metrics."""
-
         print(
             f"Loaded T-Social: nodes={self.num_nodes}, "
             f"features={self.feature_store.size(1)}, edges={self.graph.num_edges()}, "
@@ -892,6 +966,4 @@ class TSocialTrainer:
 
 
 def run_large_graph(options, spec: DatasetSpec, data: LargeGraphData):
-    """Run the T-Social path selected by the CLI dispatcher."""
-
     return TSocialTrainer(options, spec, data).run()

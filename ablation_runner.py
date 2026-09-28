@@ -1,4 +1,4 @@
-"""Resumable per-seed runner for the 19 MARGAD branch ablations.
+"""Resumable, per-seed server runner for the 19 three-loss ablations.
 
 The module purposely does not import torch, DGL, or the training entry point.
 Consequently ``--dry-run`` verifies the full matrix and its output paths on a
@@ -48,8 +48,6 @@ def _timestamp() -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the ablation-matrix launcher argument parser."""
-
     parser = argparse.ArgumentParser(
         description="Run the 19-config three-loss ablation matrix with isolated seed directories."
     )
@@ -62,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seeds", nargs="*", default=("0-4",), help="e.g. 0-4 or 0,1,4")
     parser.add_argument("--resume", action="store_true", help="skip atomically completed seeds; explicitly retry incomplete seeds")
     parser.add_argument("--dry-run", action="store_true", help="print matrix and paths without importing/running torch")
-    parser.add_argument("--output_dir", default="three_loss_ablation_results")
+    parser.add_argument("--output_dir", default="ablation_results_retained_return")
     parser.add_argument("--data_dir", default="dataset")
     parser.add_argument("--python_exe", default=sys.executable)
     parser.add_argument("--device", default="cuda:0")
@@ -317,8 +315,6 @@ def _filter_variants(variants: tuple[AblationVariant, ...], requested) -> tuple[
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Validate, optionally preview, and execute the requested run matrix."""
-
     args = build_parser().parse_args(argv)
     if args.epoch_override is not None and args.epoch_override <= 0:
         raise ValueError("--epoch_override must be positive.")

@@ -1,4 +1,4 @@
-"""Thin CLI entry point for training and evaluating MARGAD."""
+"""Thin CLI entry point for the seven-dataset experiment runtime."""
 
 from __future__ import annotations
 
@@ -11,8 +11,6 @@ from large_graph import run_large_graph
 
 
 def run_experiment(options):
-    """Dispatch one configured experiment to the full or sampled trainer."""
-
     spec = resolve_dataset(options.dataset)
     if spec.trainer == "full_graph":
         data = load_full_graph(spec, options.data_dir)
@@ -22,8 +20,6 @@ def run_experiment(options):
 
 
 def main(argv: list[str] | None = None):
-    """Run the CLI workflow and optionally export machine-readable metrics."""
-
     options = parameter_parser(argv)
     print(options, flush=True)
     results = run_experiment(options)

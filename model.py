@@ -1,38 +1,36 @@
-"""Neural components for MARGAD's three complementary anomaly signals.
-
-The historical code names ``alpha`` and ``gamma`` correspond to TA-DiffRef
-and WaveShift, respectively; they are retained for checkpoint compatibility.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class AdaptiveWaveletAffinity(nn.Module):
-    """Implement TA-DiffRef, the target-anonymized multiscale affinity branch.
+    """Calibrated random-walk-Laplacian multiscale affinity.
 
     With ``P = D^{-1}(A - diag(A))`` and ``L_rw = I - P``, the one- and
-    two-hop contexts are respectively ``P H`` and an anonymised ``P^2 H``.
-    The latter removes the target's return-path coefficient before being
-    re-normalised, so neither context contains a direct copy of ``H_i``.
-    Both contexts remain row-stochastic neighbour averages and can therefore
-    be compared to ``H_i`` without the scale mismatch of a signed wavelet
-    response.
+    two-hop contexts are ``P H`` and ``P^2 H``. The final reference retains
+    the target's return-path contribution in ``P^2 H``. Both contexts are
+    probability-calibrated neighbour averages that can be compared to ``H_i``
+    without the path-volume scale mismatch of raw propagation. The historical
+    ``full`` mode removes and renormalizes the return mass as an ablation.
     """
 
     VALID_MODES = (
         "full",
         "one_hop",
+        "symmetric_one_hop",
         "anonymous_two_hop",
         "fixed_equal_multiscale",
+        "raw_equal_multiscale",
+        "fixed_equal_no_target_anonymization",
+        "raw_equal_anonymous_no_renormalization",
         "learned_no_coefficient_normalization",
         "learned_no_target_anonymization",
         "learned_no_degree_or_path_volume_normalization",
+        "learned_raw_target_anonymization",
         "paper_matched_volume",
     )
 
-    def __init__(self, eps=1e-12, mode="full"):
+    def __init__(self, eps=1e-12, mode="learned_no_target_anonymization"):
         super().__init__()
         if mode not in self.VALID_MODES:
             raise ValueError(f"Unsupported alpha mode: {mode}")
@@ -41,8 +39,12 @@ class AdaptiveWaveletAffinity(nn.Module):
         # [2, 0], [1, 1], and [0, 2] up to per-row constant offsets.
         fixed_coefficients = {
             "one_hop": (0.0, 1.0),
+            "symmetric_one_hop": (0.0, 1.0),
             "anonymous_two_hop": (1.0, 0.0),
             "fixed_equal_multiscale": (0.5, 0.5),
+            "raw_equal_multiscale": (0.5, 0.5),
+            "fixed_equal_no_target_anonymization": (0.5, 0.5),
+            "raw_equal_anonymous_no_renormalization": (0.5, 0.5),
         }
         if mode in fixed_coefficients:
             self.register_parameter("theta_logits", None)
@@ -144,36 +146,74 @@ class AdaptiveWaveletAffinity(nn.Module):
         """Precompute the graph-only terms reused by full-graph alpha."""
         return self._random_walk_operator(adj, dtype, assume_no_return)
 
-    def raw_path_terms(self, adj, dtype):
+    def symmetric_degree_terms(self, adj, dtype):
+        """Return ``S=D^{-1/2}BD^{-1/2}`` with no self loops."""
+        raw = self._remove_diagonal(adj).to(dtype=dtype)
+        degree = self._row_sum(raw)
+        if raw.is_sparse:
+            raw = raw.coalesce()
+            indices = raw.indices()
+            denominator = (
+                degree[indices[0]].clamp_min(self.eps)
+                * degree[indices[1]].clamp_min(self.eps)
+            ).sqrt()
+            symmetric = torch.sparse_coo_tensor(
+                indices,
+                raw.values() / denominator,
+                raw.size(),
+                dtype=dtype,
+                device=raw.device,
+            ).coalesce()
+        else:
+            denominator = (
+                degree.clamp_min(self.eps).sqrt().unsqueeze(1)
+                * degree.clamp_min(self.eps).sqrt().unsqueeze(0)
+            )
+            symmetric = raw / denominator
+        return symmetric, torch.zeros(
+            symmetric.size(0), dtype=dtype, device=symmetric.device
+        )
+
+    def raw_path_terms(self, adj, dtype, assume_no_return=False):
         """Raw A/A² propagation and volumes without materialising A².
 
-        This is intentionally used only by A5/A6.  The standard ``full``
-        mode remains the target-anonymised random-walk implementation above.
+        The diagonal of ``B²`` is also returned for the raw target-removal
+        control.  The standard ``full`` mode remains the target-anonymised
+        random-walk implementation above.
         """
         raw = self._remove_diagonal(adj).to(dtype=dtype)
         one_volume = self._row_sum(raw)
         two_volume = self._adj_mm(raw, one_volume.unsqueeze(-1)).squeeze(-1)
-        return raw, one_volume, two_volume
+        return_mass = (
+            torch.zeros(raw.size(0), dtype=dtype, device=raw.device)
+            if assume_no_return
+            else self._two_hop_return_probability(raw)
+        )
+        return raw, one_volume, two_volume, return_mass
 
     def precompute_terms(self, adj, dtype, assume_no_return=False):
         """Select the graph-only terms required by the configured mode."""
-        if self.mode in (
-            "learned_no_degree_or_path_volume_normalization",
-            "paper_matched_volume",
-        ):
-            return self.raw_path_terms(adj, dtype)
+        if self.uses_raw_path_volume:
+            return self.raw_path_terms(
+                adj, dtype, assume_no_return=assume_no_return
+            )
+        if self.mode == "symmetric_one_hop":
+            return self.symmetric_degree_terms(adj, dtype)
         return self.random_walk_terms(adj, dtype, assume_no_return=assume_no_return)
 
     @property
     def uses_raw_path_volume(self):
         return self.mode in (
+            "raw_equal_multiscale",
+            "raw_equal_anonymous_no_renormalization",
             "learned_no_degree_or_path_volume_normalization",
+            "learned_raw_target_anonymization",
             "paper_matched_volume",
         )
 
     @property
     def requires_two_hop(self):
-        return self.mode != "one_hop"
+        return self.mode not in ("one_hop", "symmetric_one_hop")
 
     @property
     def uses_target_anonymization(self):
@@ -182,6 +222,13 @@ class AdaptiveWaveletAffinity(nn.Module):
             "anonymous_two_hop",
             "fixed_equal_multiscale",
             "learned_no_coefficient_normalization",
+        )
+
+    @property
+    def removes_raw_target_without_renormalization(self):
+        return self.mode in (
+            "raw_equal_anonymous_no_renormalization",
+            "learned_raw_target_anonymization",
         )
 
     def filter_coefficients(self, dtype=None):
@@ -227,6 +274,7 @@ class AdaptiveWaveletAffinity(nn.Module):
         one_hop,
         two_hop=None,
         return_probability=None,
+        return_mass=None,
         one_volume=None,
         two_volume=None,
         return_filters=False,
@@ -237,7 +285,7 @@ class AdaptiveWaveletAffinity(nn.Module):
         In T-Social they are fanout-sampled path counts, not exact full-graph
         volumes; callers preserve that distinction in their diagnostics.
         """
-        if self.mode == "one_hop":
+        if self.mode in ("one_hop", "symmetric_one_hop"):
             two_hop = one_hop if two_hop is None else two_hop
         elif two_hop is None:
             raise ValueError(f"Alpha mode {self.mode} requires a two-hop message.")
@@ -248,6 +296,12 @@ class AdaptiveWaveletAffinity(nn.Module):
             two_hop = self._anonymous_two_hop(
                 two_hop, one_hop, features, return_probability
             )
+        elif self.removes_raw_target_without_renormalization:
+            if return_mass is None:
+                raise ValueError(
+                    "Raw target removal requires diag(B^2) or its sampled analogue."
+                )
+            two_hop = two_hop - return_mass.unsqueeze(-1) * features
 
         coefficients = self.mixing_weights(dtype=features.dtype)
         h_near_per_filter = []
@@ -276,22 +330,25 @@ class AdaptiveWaveletAffinity(nn.Module):
     ):
         if self.uses_raw_path_volume:
             if walk_terms is None:
-                raw, one_volume, two_volume = self.raw_path_terms(adj, features.dtype)
+                raw, one_volume, two_volume, return_mass = self.raw_path_terms(
+                    adj, features.dtype
+                )
             else:
-                raw, one_volume, two_volume = walk_terms
+                raw, one_volume, two_volume, return_mass = walk_terms
             one_hop = self._adj_mm(raw, features)
             two_hop = self._adj_mm(raw, one_hop)
             return self.combine_sampled_terms(
                 features,
                 one_hop,
                 two_hop,
+                return_mass=return_mass,
                 one_volume=one_volume,
                 two_volume=two_volume,
                 return_filters=return_filters,
             )
 
         if walk_terms is None:
-            walk, return_probability = self.random_walk_terms(adj, features.dtype)
+            walk, return_probability = self.precompute_terms(adj, features.dtype)
         else:
             walk, return_probability = walk_terms
         one_hop = self._adj_mm(walk, features)
@@ -306,7 +363,7 @@ class AdaptiveWaveletAffinity(nn.Module):
 
 
 class MultiFilterGammaWavelet(nn.Module):
-    """Implement WaveShift with shared and channel-specific spectral responses."""
+    """Three thick/thin Laplacian wavelets at the historical target stage."""
 
     VALID_MODES = (
         "full",
@@ -432,14 +489,12 @@ class MultiFilterGammaWavelet(nn.Module):
 
 
 class GAD(nn.Module):
-    """Combine the shared encoder with TA-DiffRef and WaveShift modules."""
-
     def __init__(
         self,
         feat_size,
         hidden_size,
         dropout,
-        alpha_mode="full",
+        alpha_mode="learned_no_target_anonymization",
         gamma_mode="full",
     ):
         super().__init__()
@@ -453,8 +508,6 @@ class GAD(nn.Module):
         return torch.tanh(x_lin) if apply_tanh else x_lin
 
     def forward(self, x, laplacian=None):
-        """Encode features and optionally return both WaveShift responses."""
-
         x_lin = self.encode(x)
         if laplacian is None:
             return x_lin
@@ -464,8 +517,6 @@ class GAD(nn.Module):
     def local_affinity(
         self, h, adj, normalize=True, walk_terms=None, return_filter_scores=False,
     ):
-        """Compute TA-DiffRef affinity scores for the supplied representations."""
-
         if normalize:
             h = F.normalize(h, p=2, dim=1)
         if not return_filter_scores:

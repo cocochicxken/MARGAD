@@ -1,4 +1,4 @@
-"""Safely reuse completed non-T-Social MARGAD search artifacts.
+"""Safely reuse completed non-T-Social staged-search artifacts.
 
 The helper validates that a prior search used the same non-T-Social schedule
 before copying only resumable artifacts (logs, JSON, and CSV), never model
@@ -132,8 +132,6 @@ def destination_is_complete(root: Path, dataset: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Validate source trials and copy only resumable non-checkpoint files."""
-
     parser = argparse.ArgumentParser(
         description="Reuse completed non-T-Social staged-search results safely."
     )

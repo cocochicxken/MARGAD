@@ -1,4 +1,4 @@
-"""Resumable Global Deviation/WaveShift weight search for MARGAD.
+"""Resumable staged beta/gamma search for the seven supported datasets.
 
 Every dataset first searches 20 beta values with gamma=0, retains the three
 highest final-AUC betas, and searches all 30 gamma values for each. Every
@@ -35,8 +35,6 @@ DEFAULT_SEARCH_ROOT = "beta_gamma_staged_top3_h64_e100_tsocial10_results"
 
 @dataclass(frozen=True)
 class SearchConfig:
-    """Fix non-weight settings for one dataset's staged search."""
-
     hidden_dim: int
     lr: float
     epoch: int
@@ -517,8 +515,6 @@ def dry_run(datasets: Iterable[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run or preview the staged weight search and refresh its summaries."""
-
     options = parse_args(argv)
     search_root = root_path(options.search_root).resolve()
     if options.dry_run:

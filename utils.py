@@ -1,4 +1,4 @@
-"""Small graph-tensor utilities shared by the MARGAD loaders and trainers."""
+"""Small graph-tensor utilities shared by loaders and trainers."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ import torch
 
 
 def scipy_to_torch_sparse(matrix: sp.spmatrix) -> torch.Tensor:
-    """Convert a SciPy sparse matrix to a coalesced PyTorch COO tensor."""
-
     matrix = matrix.tocoo().astype(np.float32)
     indices = torch.from_numpy(
         np.vstack((matrix.row, matrix.col)).astype(np.int64, copy=False)
@@ -57,7 +55,7 @@ def normalized_laplacian_with_self_loop(
 
 
 def negative_sampling(adjacency: torch.Tensor) -> torch.Tensor:
-    """Sample the historical directed non-edge graph used by TA-DiffRef."""
+    """Sample the historical directed non-edge graph used by alpha training."""
     adjacency = adjacency.coalesce()
     device = adjacency.device
     indices = adjacency.indices()
@@ -90,4 +88,28 @@ def negative_sampling(adjacency: torch.Tensor) -> torch.Tensor:
     values = torch.ones(num_samples, dtype=adjacency.dtype, device=device)
     return torch.sparse_coo_tensor(
         negative, values, adjacency.size(), dtype=adjacency.dtype, device=device
+    ).coalesce()
+
+
+def bidirect_unweighted(adjacency: torch.Tensor) -> torch.Tensor:
+    """Represent a sampled undirected edge set in both sparse directions."""
+    adjacency = adjacency.coalesce()
+    indices = adjacency.indices()
+    bidirected = torch.sparse_coo_tensor(
+        torch.cat((indices, indices.flip(0)), dim=1),
+        torch.ones(
+            indices.size(1) * 2,
+            dtype=adjacency.dtype,
+            device=adjacency.device,
+        ),
+        adjacency.size(),
+        dtype=adjacency.dtype,
+        device=adjacency.device,
+    ).coalesce()
+    return torch.sparse_coo_tensor(
+        bidirected.indices(),
+        torch.ones_like(bidirected.values()),
+        bidirected.size(),
+        dtype=bidirected.dtype,
+        device=bidirected.device,
     ).coalesce()

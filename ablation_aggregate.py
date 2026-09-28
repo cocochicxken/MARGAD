@@ -1,4 +1,4 @@
-"""Aggregate completed MARGAD ablation seeds into CSV and JSON summaries."""
+"""CSV/JSON aggregation for completed three-loss ablation seed results."""
 
 from __future__ import annotations
 
@@ -289,8 +289,6 @@ def _diagnostic_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def aggregate(root: str | Path) -> dict[str, int]:
-    """Validate and aggregate every completed seed below one output root."""
-
     root = Path(root).resolve()
     completed = _completed_results(root)
     run_rows = [_run_row(path, result) for path, result in completed]
@@ -325,10 +323,8 @@ def aggregate(root: str | Path) -> dict[str, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Parse the aggregation output directory and build summary artifacts."""
-
     parser = argparse.ArgumentParser(description="Aggregate three-loss ablation result JSON files.")
-    parser.add_argument("--output_dir", default="three_loss_ablation_results")
+    parser.add_argument("--output_dir", default="ablation_results_retained_return")
     args = parser.parse_args(argv)
     aggregate(args.output_dir)
     return 0

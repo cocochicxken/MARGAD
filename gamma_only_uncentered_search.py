@@ -1,4 +1,4 @@
-"""Reuse top Global Deviation weights and search uncentered WaveShift weights."""
+"""Reuse completed Beta Top-3 values and search only uncentered Gamma weights."""
 
 from __future__ import annotations
 
@@ -163,8 +163,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Launch the uncentered WaveShift search from validated prior results."""
-
     options = parse_args(argv)
     datasets = tuple(resolve_dataset(item).cli_name for item in options.datasets)
     keys = [resolve_dataset(item).key for item in datasets]

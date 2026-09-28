@@ -1,4 +1,4 @@
-"""Export MARGAD T-Social scores for the fixed uncentered WaveShift model."""
+"""Export plot-ready T-Social scores for the fixed uncentered-Gamma model."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import torch
 from Dataloader import load_large_graph
 from dataset_config import resolve_dataset
 from large_graph import TSocialTrainer
-from model import GAD
+from model import AdaptiveWaveletAffinity, GAD
 from training_common import evaluate_numpy, minmax_numpy, set_seed
 
 
@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--beta", type=float, default=0.85)
     parser.add_argument("--gamma", type=float, default=0.75)
+    parser.add_argument("--alpha_mode", choices=AdaptiveWaveletAffinity.VALID_MODES, required=True)
     parser.add_argument("--batch_fanout", type=int, default=8)
     parser.add_argument("--eval_batch_size", type=int, default=51200)
     parser.add_argument("--num_workers", type=int, default=0)
@@ -43,8 +44,6 @@ def load_checkpoint(path: Path) -> dict:
 
 
 def main() -> None:
-    """Load one checkpoint, stream inference, and save node-level scores."""
-
     args = parse_args()
     checkpoint = Path(args.checkpoint).resolve()
     if not checkpoint.is_file():
@@ -59,7 +58,7 @@ def main() -> None:
         alpha=args.alpha,
         beta=args.beta,
         gamma=args.gamma,
-        alpha_mode="full",
+        alpha_mode=args.alpha_mode,
         gamma_mode="full",
         gamma_centering=False,
         batch_fanout=args.batch_fanout,
@@ -72,7 +71,7 @@ def main() -> None:
         feat_size=trainer.feature_store.size(1),
         hidden_size=args.hidden_dim,
         dropout=0.0,
-        alpha_mode="full",
+        alpha_mode=args.alpha_mode,
         gamma_mode="full",
     ).to(trainer.device)
     model.load_state_dict(load_checkpoint(checkpoint))
@@ -96,6 +95,7 @@ def main() -> None:
         "dataset": "tsocial",
         "checkpoint": str(checkpoint),
         "seed": args.seed,
+        "alpha_mode": args.alpha_mode,
         "gamma_mode": "full",
         "gamma_centering": False,
         "score_key": "scores",

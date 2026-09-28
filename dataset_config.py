@@ -1,4 +1,4 @@
-"""Dataset routes and fallback training defaults for the MARGAD runtime."""
+"""Single source of truth for the seven supported datasets."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ LoaderKind = Literal["mat", "elliptic_csv", "dgl_full", "dgl_large"]
 
 @dataclass(frozen=True)
 class TrainingDefaults:
-    """Fallback CLI values used when a training option is omitted."""
-
     hidden_dim: int
     lr: float
     epoch: int
@@ -29,8 +27,6 @@ class TrainingDefaults:
 
 @dataclass(frozen=True)
 class DatasetSpec:
-    """Describe one dataset's loader, trainer, and representation policies."""
-
     key: str
     cli_name: str
     loader: LoaderKind

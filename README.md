@@ -1,14 +1,14 @@
 # MARGAD
 
-Code for **Calibrated Multiscale Affinity via Target-Anonymized Diffusion for Unsupervised Graph Anomaly Detection**, submitted to *IEEE Transactions on Knowledge and Data Engineering (TKDE)*.
+Code for **Learning Reliable Multiscale References for Unsupervised Graph Anomaly Detection**, prepared for *IEEE Transactions on Knowledge and Data Engineering (TKDE)*.
 
 MARGAD is an unsupervised node-level graph anomaly detector built from three complementary signals:
 
-- **TA-DiffRef** constructs probability-calibrated, target-anonymized references across multiple diffusion orders.
+- **TA-DiffRef** constructs probability-calibrated multiscale references. The selected final operator retains target-return paths; target anonymization is an F3 control in the format study.
 - **WaveShift** measures the discrepancy between shared and channel-specific spectral responses.
 - **Global Deviation** measures how far a node representation departs from the dominant population.
 
-> **AI-assisted development disclosure.** Repository organization, this README, and concise code documentation were prepared with assistance from OpenAI Codex. The AI-assisted material should be reviewed by the authors before public release, and responsibility for the scientific claims and released code remains with the authors. The executable model and training logic, dataset defaults, and reported command parameters were not changed during this documentation pass.
+> **AI-assisted development disclosure.** Repository organization, this README, and concise code documentation were prepared with assistance from OpenAI Codex. The AI-assisted material should be reviewed by the authors before public release, and responsibility for the scientific claims and released code remains with the authors. The executable model, training code, and experiment utilities have since been synchronized with the later research checkout; this statement is not a claim that behavior remained unchanged.
 
 ## Paper-to-code mapping
 
@@ -21,7 +21,7 @@ The implementation retains the historical internal names `alpha`, `beta`, and `g
 | WaveShift | `gamma` | `MultiFilterGammaWavelet` and WaveShift helpers in `model.py` / `training_common.py` |
 | Joint training and score fusion | `alpha + beta + gamma` | `full_graph.py` and `large_graph.py` |
 
-In the main model, `--alpha` weights TA-DiffRef, `--beta` corresponds to the Global Deviation coefficient, and `--gamma` corresponds to the WaveShift coefficient. The paper fixes the TA-DiffRef coefficient to one.
+In the main model, `--alpha` weights TA-DiffRef, `--beta` corresponds to the Global Deviation coefficient, and `--gamma` corresponds to the WaveShift coefficient. The paper fixes the TA-DiffRef coefficient to one. `--alpha_mode learned_no_target_anonymization` is the selected final operator: it combines calibrated `P H` and `P² H` without deleting the target-return term. The historical `--alpha_mode full` implements the target-anonymized F3 control; its name is retained for existing checkpoints.
 
 ## Repository structure
 
@@ -55,8 +55,11 @@ In the main model, `--alpha` weights TA-DiffRef, `--beta` corresponds to the Glo
 | `export_tsocial_scores.py` | T-Social score export with checkpoint-policy validation |
 | `export_tsocial_uncentered_scores.py` | Fixed uncentered T-Social score export |
 | `reuse_completed_non_tsocial_results.py` | Validation and reuse of resumable non-T-Social search artifacts |
+| `ta_diffref_ablation_config.py`, `run_ta_diffref_ablation.py`, `aggregate_ta_diffref_ablation.py` | Historical A0--A6 mechanism study; not the final F0--F5 format study |
+| `ta_diffref_format_config.py`, `run_ta_diffref_format.py`, `aggregate_ta_diffref_format.py` | F0--F5 operator-format definitions, execution, and aggregation |
+| `tests/` | Focused argument, loss, and TA-DiffRef operator tests |
 
-The `main_tkde.tex`, `main_tkde.pdf`, `sections/`, and `generated/` files are manuscript materials used to align the repository terminology and experimental description.
+The manuscript source and PDFs are distributed separately from this code repository.
 
 ## Supported datasets
 
@@ -108,7 +111,7 @@ Install the CUDA-compatible PyTorch 2.0.0 and DGL 1.1.2 packages using their off
 
 Run commands from the repository root. `--data_dir` defaults to `dataset`, and `--device` defaults to `cuda`.
 
-The following single-dataset commands and parameter values are intentionally preserved from the previous README:
+The following commands use the fixed dataset hyperparameters and the current retained-return default. They do not reproduce the earlier target-anonymized Table II row without adding `--alpha_mode full`.
 
 ```bash
 # Facebook
@@ -145,10 +148,10 @@ python final_10run_efficiency.py \
   --datasets Facebook Reddit YelpChi tfinance elliptic tsocial \
   --data_dir dataset \
   --device cuda:0 \
-  --results_root results/final_10run
+  --results_root results/final_retained_return_10run
 ```
 
-This launcher runs ten independent seeds per dataset, keeps each dataset in an isolated directory, records logs and configuration metadata, supports resumable execution by default, and writes aggregate CSV files. Preview the complete job without launching training:
+This launcher passes the retained-return operator explicitly, runs ten independent seeds per dataset, keeps each dataset in an isolated directory, records logs and configuration metadata, supports resumable execution by default, and writes aggregate CSV files. Use a new `--results_root` when changing the operator so earlier outputs are not reused. Preview the complete job without launching training:
 
 ```bash
 python final_10run_efficiency.py \
@@ -182,7 +185,7 @@ python ablation_runner.py \
 Remove `--dry-run` and add `--resume` to execute or continue the selected matrix. Each seed is written to an isolated directory with its command, log, metrics, diagnostics, heartbeat, and completion marker. Aggregate completed runs with:
 
 ```bash
-python ablation_aggregate.py --output_dir three_loss_ablation_results
+python ablation_aggregate.py --output_dir ablation_results_retained_return
 ```
 
 For a single direct run, optional machine-readable artifacts can be requested with:
@@ -192,6 +195,18 @@ python run.py --dataset Facebook \
   --result_json results/facebook/result.json \
   --diagnostics_json results/facebook/diagnostics.json
 ```
+
+### F0--F5 format study
+
+This study is separate from the main training entry point. F3 calibrates both orders and removes target return; F5 calibrates both orders and retains return. The current runner trains all six formats independently with common seeds and writes to `return/ta_diffref_format_final_f0_f5_10seed`. The archived experiment used the opposite F3/F5 labels and imported its anonymous result from the earlier Table II evaluation; do not merge those historical run directories with new outputs. The current manuscript's Table IV maps the archived ten-run results to the displayed F3/F5 labels without inventing new measurements.
+
+Preview the study without launching training:
+
+```bash
+python run_ta_diffref_format.py --datasets Facebook Reddit YelpChi tfinance elliptic tsocial --seeds 0-9 --dry_run
+```
+
+After training, run `python aggregate_ta_diffref_format.py` to summarize all six formats. For T-Social score export, pass the checkpoint's actual operator explicitly, for example `--alpha_mode learned_no_target_anonymization` for a newly trained final checkpoint. The switch does not change checkpoint weights, so selecting the wrong operator at inference changes the score calculation.
 
 ## Outputs
 

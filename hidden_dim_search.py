@@ -1,4 +1,4 @@
-"""Resumable MARGAD hidden-dimension search using final configurations.
+"""Resumable hidden-dimension search using the final README configurations.
 
 All parameters are fixed per dataset except hidden_dim.  Training-time AUC is
 disabled so checkpoint selection remains label-free; final AUROC/AUPRC are
@@ -34,8 +34,6 @@ DEFAULT_SEARCH_ROOT = "hidden_dim_search_readme_final_h2to256_results"
 
 @dataclass(frozen=True)
 class FinalConfiguration:
-    """Fix dataset settings while the hidden dimension is varied."""
-
     lr: float
     epoch: int
     alpha: float
@@ -480,8 +478,6 @@ def parse_args(argv: list[str] | None = None):
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run the requested hidden-dimension trials and aggregate results."""
-
     options = parse_args(argv)
     datasets = tuple(resolve_dataset(dataset).cli_name for dataset in options.datasets)
     hidden_dims = tuple(options.hidden_dims)

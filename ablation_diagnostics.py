@@ -1,4 +1,4 @@
-"""Small, serialisable diagnostics for the three-branch MARGAD ablations.
+"""Small, serialisable diagnostics for the three-loss ablation study.
 
 The training paths keep tensors on the accelerator.  This module consumes
 only scalar arrays or channel aggregates, so it never asks T-Social to save a
@@ -32,8 +32,6 @@ def json_safe(value: Any) -> Any:
 
 
 def write_json_atomic(path: str | Path, payload: dict[str, Any]) -> None:
-    """Write a JSON artifact atomically after converting NumPy values."""
-
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")

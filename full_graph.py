@@ -1,4 +1,4 @@
-"""Full-graph MARGAD training for the six datasets that fit in memory."""
+"""Encapsulated full-graph training for six supported datasets."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from training_common import (
     set_seed,
     synchronize,
 )
-from utils import negative_sampling, normalized_laplacian_with_self_loop
+from utils import bidirect_unweighted, negative_sampling, normalized_laplacian_with_self_loop
 from ablation_diagnostics import (
     GammaConcentrationAccumulator,
     alpha_degree_diagnostics,
@@ -44,8 +44,6 @@ from ablation_diagnostics import (
 
 
 class FullGraphTrainer:
-    """Train, select, evaluate, and diagnose one full-graph dataset."""
-
     def __init__(self, options, spec: DatasetSpec, data: FullGraphData):
         self.options = options
         self.spec = spec
@@ -63,8 +61,6 @@ class FullGraphTrainer:
         )
 
     def _new_model(self) -> GAD:
-        """Create a fresh MARGAD model for one independent run."""
-
         return GAD(
             feat_size=self.features.size(1),
             hidden_size=self.options.hidden_dim,
@@ -246,8 +242,7 @@ class FullGraphTrainer:
             "gamma": gamma_payload,
             "score_only_combinations": score_only,
             "notes": {
-                "alpha_full_mode": "P=D^-1(A-diag(A)); target-return-removed two-hop context; convex learned mixing",
-                "raw_volume_interpretation": "A5/A6 use exact sparse raw A/A^2 message/volume operations on this full graph.",
+                "raw_volume_interpretation": "Raw TA-DiffRef controls use exact sparse B/B^2 message and path-volume operations on this full graph.",
                 "checkpoint_selection": "minimum unsupervised total training loss after the training midpoint",
             },
         })
@@ -288,8 +283,6 @@ class FullGraphTrainer:
         return Path.cwd() / f"best_model_run{run_index}.pth"
 
     def _train_one(self, run_index: int) -> RunResult:
-        """Train one seed, restore the selected checkpoint, and evaluate it."""
-
         seed = self.options.seed_offset + run_index
         set_seed(seed)
         print(f"\n# Run:{run_index} seed={seed}", flush=True)
@@ -331,6 +324,8 @@ class FullGraphTrainer:
             alpha_loss = beta_loss = gamma_loss = zero
             if self.use_alpha:
                 negative_adjacency = negative_sampling(self.adjacency)
+                if model.alpha_wavelet.mode == "symmetric_one_hop":
+                    negative_adjacency = bidirect_unweighted(negative_adjacency)
                 negative_walk_terms = model.alpha_wavelet.precompute_terms(
                     negative_adjacency, embeddings.dtype, assume_no_return=True
                 )
@@ -504,8 +499,6 @@ class FullGraphTrainer:
         )
 
     def run(self) -> list[RunResult]:
-        """Execute all requested seeds and print their aggregate summary."""
-
         print(
             f"Loaded {self.spec.cli_name}: nodes={self.features.size(0)}, "
             f"features={self.features.size(1)}, edges={self.adjacency._nnz()}, "
@@ -525,6 +518,4 @@ class FullGraphTrainer:
 
 
 def run_full_graph(options, spec: DatasetSpec, data: FullGraphData):
-    """Run the full-graph training path selected by the CLI dispatcher."""
-
     return FullGraphTrainer(options, spec, data).run()

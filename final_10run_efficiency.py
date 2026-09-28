@@ -1,4 +1,4 @@
-"""Run final MARGAD configurations ten times and collect efficiency data."""
+"""Run the final README configurations ten times and collect efficiency data."""
 
 from __future__ import annotations
 
@@ -22,13 +22,11 @@ from dataset_config import resolve_dataset
 ROOT = Path(__file__).resolve().parent
 RUNS = 10
 DATASETS = ("Facebook", "Reddit", "Amazon", "YelpChi", "elliptic", "tfinance", "tsocial")
-DEFAULT_RESULTS_ROOT = "final_readme_10runs_efficiency_results"
+DEFAULT_RESULTS_ROOT = "final_retained_return_10runs_efficiency_results"
 
 
 @dataclass(frozen=True)
 class FinalConfiguration:
-    """Store one dataset's final command-line configuration."""
-
     hidden_dim: int
     lr: float
     epoch: int
@@ -41,11 +39,11 @@ class FinalConfiguration:
 
 # Transcribed from the final commands in README.md.
 FINAL_CONFIGURATIONS = {
-    "facebook": FinalConfiguration(64, 3e-3, 70, 1.0, 0.15, 0.50),
+    "facebook": FinalConfiguration(64, 3e-3, 70, 1.0, 0.15, 0.50, 0),
     "reddit": FinalConfiguration(128, 3e-3, 110, 1.0, 0.35, 1.45),
     "amazon": FinalConfiguration(64, 3e-3, 70, 1.0, 0.40, 0.15),
     "yelpchi": FinalConfiguration(64, 3e-3, 65, 1.0, 0.15, 1.05),
-    "elliptic": FinalConfiguration(64, 1e-3, 70, 1.0, 0.30, 1.00),
+    "elliptic": FinalConfiguration(64, 1e-3, 70, 1.0, 0.30, 1.00, 0),
     "tfinance": FinalConfiguration(64, 3e-3, 85, 1.0, 1.00, 0.05),
     "tsocial": FinalConfiguration(
         64, 3e-3, 10, 1.0, 0.85, 0.75, 0,
@@ -233,6 +231,7 @@ def run_dataset(
         "--alpha", decimal(config.alpha),
         "--beta", decimal(config.beta),
         "--gamma", decimal(config.gamma),
+        "--alpha_mode", "learned_no_target_anonymization",
         "--gamma_centering", str(config.gamma_centering),
         "--runs", str(RUNS),
         "--tests", "1",
@@ -373,8 +372,6 @@ def parse_args(argv: list[str] | None = None):
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Run final configurations and write detection/efficiency summaries."""
-
     options = parse_args(argv)
     if options.tsocial_beta is not None or options.tsocial_gamma is not None:
         original = FINAL_CONFIGURATIONS["tsocial"]
